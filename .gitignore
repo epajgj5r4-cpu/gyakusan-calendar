@@ -1,0 +1,9 @@
+# OS
+.DS_Store
+
+# セッション・ローカル作業用
+.remember/
+
+# 依存・ログ（将来用）
+node_modules/
+*.log
