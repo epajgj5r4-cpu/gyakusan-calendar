@@ -277,6 +277,8 @@ body::before {
 .rec-tag { display: inline-flex; align-items: center; gap: 5px; background: var(--chip-bg); color: var(--chip-ink); font-size: .76rem; font-weight: 700; padding: 5px 11px; border-radius: 999px; margin: 9px 0; }
 .rec-text { color: var(--ink); white-space: pre-wrap; word-break: break-word; }
 .record-empty { color: var(--ink-soft); text-align: center; padding: 24px 0; }
+.load-more-wrap { margin-top: 16px; }
+.load-more { width: 100%; }
 
 /* ===== 目標設定タブ ===== */
 .settings-head { display: flex; align-items: center; gap: 12px; position: relative; min-height: 88px; }

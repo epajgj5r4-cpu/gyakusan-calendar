@@ -86,7 +86,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('is-active', b.dataset.tab === name));
   $('header-date').textContent = formatHeader(todayStr());
   if (name === 'today') renderToday();
-  if (name === 'records') renderRecords();
+  if (name === 'records') { recordsShown = PAGE_SIZE; renderRecords(); }
   if (name === 'settings') { fillSettings(); updatePreview(); }
 }
 document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
@@ -177,6 +177,9 @@ $('to-newgoal').addEventListener('click', () => switchTab('settings'));
 /* ============================================================
  * 記録タブ
  * ============================================================ */
+const PAGE_SIZE = 20;      // 最初に表示する件数 / 「さらに読み込む」で増える単位
+let recordsShown = PAGE_SIZE;
+
 function renderRecords() {
   // 目標バー
   if (state.goal) {
@@ -199,7 +202,8 @@ function renderRecords() {
   list.innerHTML = '';
   $('record-empty').classList.toggle('hidden', logs.length !== 0);
 
-  logs.forEach(log => {
+  const shown = logs.slice(0, recordsShown);
+  shown.forEach(log => {
     const item = document.createElement('div');
     item.className = 'rec-item';
 
@@ -236,8 +240,25 @@ function renderRecords() {
     item.append(dot, card);
     list.appendChild(item);
   });
+
+  // 「さらに読み込む」ボタン
+  const wrap = $('load-more-wrap');
+  wrap.innerHTML = '';
+  if (logs.length > recordsShown) {
+    const remaining = logs.length - recordsShown;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-outline load-more';
+    btn.textContent = `さらに読み込む（残り${remaining}件）`;
+    btn.addEventListener('click', () => {
+      recordsShown += PAGE_SIZE;
+      renderRecords();
+    });
+    wrap.appendChild(btn);
+  }
 }
-$('record-search').addEventListener('input', renderRecords);
+// 検索が変わったら先頭から表示し直す
+$('record-search').addEventListener('input', () => { recordsShown = PAGE_SIZE; renderRecords(); });
 
 /* ============================================================
  * 目標設定タブ
