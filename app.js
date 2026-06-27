@@ -2,7 +2,7 @@
  * 逆算カレンダー app.js（目標管理ツール / ライトUI版）
  * - 3タブ構成: 今日 / 記録 / 目標設定
  * - 目標を1つ設定し、ゴール日までの残り日数を確認
- * - その日の「一歩」を日付ごとに記録（同じ日は上書き）
+ * - 「今日の一歩」は保存するたびに記録へ追加（積み重ね型ログ）
  * - 目標に If-Then ルール（もし〇〇したら、△△する）を1つ持てる
  * - データはすべて localStorage に保存
  * ============================================================ */
@@ -12,18 +12,22 @@ const STORAGE_KEY = 'gyakusan-calendar';
 /* ---------- 状態 ---------- */
 // state = {
 //   goal: { name, startDate, goalDate, ifThen:{cond,action} } | null,
-//   entries: { "YYYY-MM-DD": { text } }
+//   logs: [ { id, ts, text } ]   // ts: 保存時刻(epoch ms)。新しいものが上。
 // }
 let state = loadState();
 
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
 function loadState() {
-  let data = { goal: null, entries: {} };
+  let data = { goal: null, logs: [] };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) data = JSON.parse(raw);
   } catch (e) { /* 壊れていたら初期化 */ }
 
-  // 旧形式（days:{tasks,memo}）→ entries へ移行
+  // 旧形式（days:{tasks,memo}）→ entries へ
   if (data.days && !data.entries) {
     data.entries = {};
     for (const [date, day] of Object.entries(data.days)) {
@@ -34,30 +38,42 @@ function loadState() {
     }
     delete data.days;
   }
-  if (!data.entries) data.entries = {};
-  // 文字列 or 旧{text,category} → {text} に正規化
-  for (const [date, v] of Object.entries(data.entries)) {
-    if (typeof v === 'string') data.entries[date] = { text: v };
-    else if (v && typeof v === 'object') data.entries[date] = { text: v.text || '' };
+
+  // 旧形式（entries: 日付キー上書き型）→ logs（追記型）へ移行
+  if (!Array.isArray(data.logs)) {
+    data.logs = [];
+    if (data.entries && typeof data.entries === 'object') {
+      Object.entries(data.entries)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .forEach(([date, v]) => {
+          const text = typeof v === 'string' ? v : (v && v.text) || '';
+          if (text && text.trim()) {
+            const [y, m, d] = date.split('-').map(Number);
+            const ts = new Date(y, m - 1, d, 12, 0, 0).getTime();
+            data.logs.push({ id: genId(), ts, text: text.trim() });
+          }
+        });
+    }
   }
+  delete data.entries;
   return data;
 }
 function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 
 /* ---------- 日付ユーティリティ ---------- */
+const pad = (n) => String(n).padStart(2, '0');
 function todayStr() { return toDateStr(new Date()); }
-function toDateStr(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+function toDateStr(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 function parseDate(str) { const [y, m, d] = str.split('-').map(Number); return new Date(y, m - 1, d); }
 function diffDays(aStr, bStr) { return Math.round((parseDate(bStr) - parseDate(aStr)) / 86400000); }
 const WD = ['日','月','火','水','木','金','土'];
 function formatLong(str) { const d = parseDate(str); return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日（${WD[d.getDay()]}）`; }
 function formatHeader(str) { const d = parseDate(str); return `${d.getMonth()+1}月${d.getDate()}日（${WD[d.getDay()]}）`; }
-function formatSlash(str) { const d = parseDate(str); return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}（${WD[d.getDay()]}）`; }
+// ログ用：タイムスタンプ → 「2026/06/27（土） 14:30」
+function formatStamp(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())}（${WD[d.getDay()]}） ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -101,10 +117,14 @@ function renderToday() {
     renderRuleBanner();
   }
 
-  // 今日の記録を反映
-  const e = state.entries[today];
-  $('step-input').value = e ? e.text : '';
+  // 入力欄は常に新規記録用（保存のたびに積み重なる）
+  $('step-input').value = '';
   $('save-status').textContent = '';
+}
+
+// 記録のある日数（達成サマリー用）
+function recordedDays() {
+  return new Set(state.logs.map(l => toDateStr(new Date(l.ts)))).size;
 }
 
 // 達成画面の内容を埋める
@@ -113,9 +133,9 @@ function renderCelebrate(remain) {
   $('celebrate-title').textContent = remain === 0 ? '🎉 目標日です！' : '🎉 達成おめでとう！';
 
   const total = Math.max(diffDays(state.goal.startDate, state.goal.goalDate), 1);
-  const recorded = Object.values(state.entries).filter(x => x.text && x.text.trim()).length;
-  let summary = recorded > 0
-    ? `${total}日間で ${recorded}日ぶんの一歩を記録しました。`
+  const days = recordedDays();
+  let summary = days > 0
+    ? `${total}日間で ${days}日ぶんの一歩を記録しました。`
     : `${total}日間、おつかれさまでした。`;
   if (remain < 0) summary += `（目標日から${Math.abs(remain)}日経過）`;
   $('celebrate-summary').textContent = summary;
@@ -142,12 +162,12 @@ function renderRuleBanner() {
 }
 
 $('save-step').addEventListener('click', () => {
-  const today = todayStr();
   const text = $('step-input').value.trim();
-  if (text) state.entries[today] = { text };
-  else delete state.entries[today];
+  if (!text) { $('save-status').textContent = '内容を入力してください。'; return; }
+  state.logs.push({ id: genId(), ts: Date.now(), text });
   saveState();
-  $('save-status').textContent = '保存しました ✓';
+  $('step-input').value = '';          // 次の記録のためにクリア
+  $('save-status').textContent = '記録に追加しました ✓';
 });
 
 $('go-setup').addEventListener('click', () => switchTab('settings'));
@@ -170,18 +190,16 @@ function renderRecords() {
 
   const q = ($('record-search').value || '').trim().toLowerCase();
 
-  const dates = Object.keys(state.entries)
-    .filter(d => state.entries[d] && state.entries[d].text && state.entries[d].text.trim())
-    .filter(d => !q || state.entries[d].text.toLowerCase().includes(q))
-    .sort().reverse();
+  const logs = state.logs
+    .filter(l => l.text && l.text.trim())
+    .filter(l => !q || l.text.toLowerCase().includes(q))
+    .sort((a, b) => b.ts - a.ts); // 新しい順
 
   const list = $('record-list');
   list.innerHTML = '';
-  $('record-empty').classList.toggle('hidden', dates.length !== 0);
+  $('record-empty').classList.toggle('hidden', logs.length !== 0);
 
-  dates.forEach(date => {
-    const e = state.entries[date];
-
+  logs.forEach(log => {
     const item = document.createElement('div');
     item.className = 'rec-item';
 
@@ -195,15 +213,15 @@ function renderRecords() {
     top.className = 'rec-top';
     const dEl = document.createElement('span');
     dEl.className = 'rec-date';
-    dEl.textContent = formatSlash(date);
+    dEl.textContent = formatStamp(log.ts);
     const menu = document.createElement('button');
     menu.className = 'rec-menu';
     menu.type = 'button';
     menu.textContent = '⋯';
     menu.setAttribute('aria-label', 'この記録を削除');
     menu.addEventListener('click', () => {
-      if (confirm(`${formatSlash(date)} の記録を削除しますか？`)) {
-        delete state.entries[date];
+      if (confirm('この記録を削除しますか？')) {
+        state.logs = state.logs.filter(l => l.id !== log.id);
         saveState();
         renderRecords();
       }
@@ -212,7 +230,7 @@ function renderRecords() {
 
     const txt = document.createElement('p');
     txt.className = 'rec-text';
-    txt.textContent = e.text;
+    txt.textContent = log.text;
 
     card.append(top, txt);
     item.append(dot, card);
@@ -282,7 +300,7 @@ $('goal-form').addEventListener('submit', (e) => {
 
 $('reset-btn').addEventListener('click', () => {
   if (confirm('目標とすべての記録を削除して最初からやり直しますか？')) {
-    state = { goal: null, entries: {} };
+    state = { goal: null, logs: [] };
     saveState();
     fillSettings();
     updatePreview();
